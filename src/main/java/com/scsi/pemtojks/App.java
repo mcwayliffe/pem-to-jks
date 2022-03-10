@@ -51,6 +51,9 @@ public class App {
 	
 	@Parameter(names = "-force")
 	private boolean overwriteExistingKeystore;
+	
+	@Parameter(names = "-verbose")
+	private boolean verbose;
 
 	@Parameter(names = "-key", converter = PathConverter.class, required = true)
 	private Path keyFile;
@@ -86,8 +89,12 @@ public class App {
 
 		initializeArgs(args);
 		
-		if (!overwriteExistingKeystore && this.keystoreFile.toFile().exists()) {
-			throw new PemToJksException("ERROR: file " + this.keyFile + " exists. Use '-force' to overwrite");
+		if (this.keystoreFile.toFile().exists()) {
+			if (!this.overwriteExistingKeystore) {
+				throw new PemToJksException("ERROR: file " + this.keyFile + " exists. Use '-force' to overwrite");
+			} else if (this.verbose){
+				System.out.println("INFO: file " + this.keyFile + " exists -- will overwrite it");
+			}
 		}
     	
     	certChain = getCertChain(pathToUrl(this.chainFile));
@@ -157,8 +164,12 @@ public class App {
 				nextCert = cf.generateCertificate(bis);
 				if (nextCert instanceof X509Certificate) {
 					certs.add((X509Certificate) nextCert);
+					if (this.verbose) {
+						System.out.println("INFO: === In " + certUrl + " ===");
+						System.out.println(nextCert);
+					}
 				} else {
-					System.err.println("Found a cert of an unexpected type: " + nextCert.getType());
+					throw new PemToJksException("Found a cert of an unexpected type: " + nextCert.getType());
 				}
 			}
 		} catch (IOException | CertificateException e) {
@@ -171,6 +182,10 @@ public class App {
 	
 	
     void throwIfCertWontValidate(X509Certificate cert) throws PemToJksException {
+    	if (this.verbose) {
+    		System.out.println("INFO: Checking cert " + cert.getSubjectX500Principal() + " for validity");
+    	}
+
 		try {
 			cert.checkValidity();
 		} catch (CertificateExpiredException e) {
@@ -185,8 +200,14 @@ public class App {
 		X509Certificate curCert = cert;
 		
 		for (X509Certificate intermediate : chain) {
+			if (this.verbose) {
+				System.out.println("INFO: Verifying " + curCert.getSubjectX500Principal() + " against " + intermediate.getSubjectX500Principal());
+			}
 			try {
 				curCert.verify(intermediate.getPublicKey());
+				if (this.verbose) {
+					System.out.println("INFO: Verified successfully");
+				}
 			} catch (InvalidKeyException | CertificateException | NoSuchAlgorithmException | NoSuchProviderException
 					| SignatureException e) {
 				throw new PemToJksException("Could not validate certificate: " + e.getMessage(), e);
