@@ -33,6 +33,7 @@ import javax.security.auth.x500.X500Principal;
 
 import com.beust.jcommander.JCommander;
 import com.beust.jcommander.Parameter;
+import com.beust.jcommander.ParameterException;
 import com.beust.jcommander.converters.PathConverter;
 
 
@@ -44,6 +45,12 @@ public class App {
 	private static final Pattern CN_PAT_RFC1779 = Pattern.compile("CN\\s*=\\s*([A-Za-z0-9._ -]+)(,)*");
 	private static final String DEFAULT_KEYSTORE_NAME = "keystore.jks";
 	static final String DEFAULT_KEYSTORE_PASSWORD = "changeit";
+	
+	@Parameter(names = "-help", help = true)
+	private boolean help;
+	
+	@Parameter(names = "-force")
+	private boolean overwriteExistingKeystore;
 
 	@Parameter(names = "-key", converter = PathConverter.class, required = true)
 	private Path keyFile;
@@ -77,7 +84,11 @@ public class App {
     	List<X509Certificate> certChain;
     	X509Certificate clientCert;
 
-    	initializeArgs(args);
+		initializeArgs(args);
+		
+		if (!overwriteExistingKeystore && this.keystoreFile.toFile().exists()) {
+			throw new PemToJksException("ERROR: file " + this.keyFile + " exists. Use '-force' to overwrite");
+		}
     	
     	certChain = getCertChain(pathToUrl(this.chainFile));
 		if (certChain.isEmpty()) {
@@ -93,15 +104,27 @@ public class App {
 		
 		RSAPrivateKey privateKey = getPrivateKey(pathToUrl(this.keyFile));
 		KeyStore keystore = newSingleEntryKeystore(privateKey, clientCert, certChain, keystorePass);
+		
 		saveKeyStore(keystore, this.keystorePass, this.keystoreFile);
     }
     
 
     void initializeArgs(String[] args) {
-		JCommander.newBuilder()
+		JCommander jc = JCommander.newBuilder()
 				.addObject(this)
-				.build()
-				.parse(args);
+				.build();
+		
+		try {
+			jc.parse(args);
+		} catch (ParameterException e) {
+			jc.usage();
+			System.exit(1);
+		}
+
+		if (this.help) {
+			jc.usage();
+			System.exit(1);
+		}
     }
     
     

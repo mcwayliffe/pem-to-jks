@@ -71,6 +71,7 @@ public class AppTest {
 		chainFile = Path.of(caCertUrl.toURI()).toAbsolutePath().toString();
 		app.run(new String[] 
 				{"-key", privKeyFile,
+				 "-force",
 				 "-cert", certFile,
 				 "-chain", chainFile,
 				 "-out", keystoreFile});
