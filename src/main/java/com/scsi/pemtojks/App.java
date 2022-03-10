@@ -41,7 +41,7 @@ import com.beust.jcommander.converters.PathConverter;
 // 2. Delete the alias from that keystore if it exists (but ONLY if we're 100% sure we can replace it)
 // 3. Test this on a running instance of Apache-FTPServer
 public class App {
-	private static final Pattern CN_PAT_RFC1779 = Pattern.compile("CN\\s*=\\s*([A-Za-z0-9._-]+)(,)*");
+	private static final Pattern CN_PAT_RFC1779 = Pattern.compile("CN\\s*=\\s*([A-Za-z0-9._ -]+)(,)*");
 	private static final String DEFAULT_KEYSTORE_NAME = "keystore.jks";
 	static final String DEFAULT_KEYSTORE_PASSWORD = "changeit";
 
@@ -68,77 +68,146 @@ public class App {
 
 
 	
-    public static void main( String[] args ) throws PemToJksException {
-		App app = new App();
-
-		JCommander.newBuilder()
-				.addObject(app)
-				.build()
-				.parse(args);
-		
-		app.run();
+    public static void main(String[] args) throws PemToJksException {
+		new App().run(args);
     }
     
     
-    /**
-     * **IMPORTANT** This method assumes that arguments have been set on "this"
-     * @throws CertificateException 
-     * @throws InvalidKeySpecException 
-     * @throws NoSuchAlgorithmException 
-     * @throws KeyStoreException 
-     * @throws PemToJksException 
-     */
-    public void run() throws PemToJksException {
-    	List<X509Certificate> completeCertChain = new ArrayList<>();
-    	X509Certificate clientCert = null;
+    public void run(String[] args) throws PemToJksException {
+    	List<X509Certificate> certChain;
+    	X509Certificate clientCert;
 
-    	if (null != this.certFile) { // They've given us both a cert and a chain
-			completeCertChain.addAll(getCertChain(pathToUrl(this.certFile)));
-    		if (1 != completeCertChain.size()) {
-    			// TODO
-    			throw new PemToJksException("ERROR: The certificate file [" 
-    			                           + this.certFile.toAbsolutePath()
-    			                           + "] must contain one and only one certificate.");
-    		}
-    		
-    		clientCert = completeCertChain.get(0);
-    	}
+    	initializeArgs(args);
     	
-		completeCertChain.addAll(getCertChain(pathToUrl(this.chainFile)));
-		
-		if (completeCertChain.isEmpty()) {
-			// TODO
+    	certChain = getCertChain(pathToUrl(this.chainFile));
+		if (certChain.isEmpty()) {
 			throw new PemToJksException("ERROR: No certificates found in chain file");
 		}
+
+		clientCert = (null != this.certFile) ? 
+				getSingleCert(pathToUrl(this.certFile)) 
+				: certChain.get(0);
 		
-		if (null == clientCert) {
-			clientCert = completeCertChain.get(0);
+		throwIfCertWontValidate(clientCert); // Expiration
+		throwIfCertWontVerify(clientCert, certChain); // Signatures 
+		
+		RSAPrivateKey privateKey = getPrivateKey(pathToUrl(this.keyFile));
+		KeyStore keystore = newSingleEntryKeystore(privateKey, clientCert, certChain, keystorePass);
+		saveKeyStore(keystore, this.keystorePass, this.keystoreFile);
+    }
+    
+
+    void initializeArgs(String[] args) {
+		JCommander.newBuilder()
+				.addObject(this)
+				.build()
+				.parse(args);
+    }
+    
+    
+    X509Certificate getSingleCert(URL certUrl) throws PemToJksException {
+		List<X509Certificate> certs = getCertChain(certUrl);
+			
+		if (1 != certs.size()) {
+			throw new PemToJksException(
+					"ERROR: [" + certUrl + "] must contain one and only one certificate.");
 		}
-		
+    		
+		return certs.get(0);
+    }
+    
+    
+	List<X509Certificate> getCertChain(URL certUrl) throws PemToJksException {
+		List<X509Certificate> certs = new ArrayList<>();
+		Certificate nextCert;
+		CertificateFactory cf;
+
 		try {
-			clientCert.checkValidity();
+			cf = CertificateFactory.getInstance("X.509");
+		} catch (CertificateException e) {
+			throw new PemToJksException(
+					"Could not get a CertificateFactory for X509 format " + e.getMessage(), e);
+		}
+
+		try (BufferedInputStream bis = new BufferedInputStream(certUrl.openStream());) {
+			while (bis.available() > 0) {
+				nextCert = cf.generateCertificate(bis);
+				if (nextCert instanceof X509Certificate) {
+					certs.add((X509Certificate) nextCert);
+				} else {
+					System.err.println("Found a cert of an unexpected type: " + nextCert.getType());
+				}
+			}
+		} catch (IOException | CertificateException e) {
+			throw new PemToJksException(
+					"Could not parse cert chain from URL (" + certUrl + "): " + e.getMessage(), e);
+		}
+
+		return certs;
+	}
+	
+	
+    void throwIfCertWontValidate(X509Certificate cert) throws PemToJksException {
+		try {
+			cert.checkValidity();
 		} catch (CertificateExpiredException e) {
 			throw new PemToJksException("ERROR: Certificate has expired " + e.getMessage());
 		} catch (CertificateNotYetValidException e) {
 			throw new PemToJksException("ERROR: Certificate is not yet valid " + e.getMessage());
 		}
+    }
+    
+    
+    void throwIfCertWontVerify(X509Certificate cert, List<X509Certificate> chain) throws PemToJksException {
+		X509Certificate curCert = cert;
 		
-		X509Certificate curCert = clientCert;
-		
-		for (X509Certificate intermediate : completeCertChain) {
+		for (X509Certificate intermediate : chain) {
 			try {
 				curCert.verify(intermediate.getPublicKey());
 			} catch (InvalidKeyException | CertificateException | NoSuchAlgorithmException | NoSuchProviderException
 					| SignatureException e) {
-				// TODO Auto-generated catch block
-				throw new PemToJksException("Could not validate certificate: " + e.getMessage());
+				throw new PemToJksException("Could not validate certificate: " + e.getMessage(), e);
 			}
+			curCert = intermediate;
+		}
+    }
+    
+    
+	KeyStore newSingleEntryKeystore(
+			RSAPrivateKey key, X509Certificate cert, List<X509Certificate> chain, String passwd) 
+			throws PemToJksException {
+		// This method assumes that the first cert in the chain is "our" cert. Is that safe???
+		KeyStore store;
+		List<X509Certificate> fullChain;
+		
+		if (cert == null) {
+			throw new PemToJksException("ERROR: No client certificate given");
 		}
 		
-		RSAPrivateKey privateKey = getPrivateKey(pathToUrl(this.keyFile));
-		KeyStore keystore = newSingleEntryKeystore(privateKey, completeCertChain, keystorePass);
-		saveKeyStore(keystore, this.keystorePass, this.keystoreFile);
-    }
+		if (chain == null || chain.isEmpty()) {
+			throw new PemToJksException("ERROR: The certificate chain is empty");
+		}
+		
+		fullChain = new ArrayList<>(chain);
+		fullChain.add(0, cert);
+		
+		store = createEmptyKeyStore(passwd);
+
+		String entryAlias = ! "".equals(this.alias) ? this.alias : getCertCN(cert);
+
+		if ("".equals(entryAlias)) {
+			throw new PemToJksException(
+					"Could not store entry: no alias provided AND the certificate has no /CN field");
+		} 
+
+		try {
+			store.setKeyEntry(entryAlias, key, passwd.toCharArray(), chain.toArray(new Certificate[chain.size()]));
+		} catch (KeyStoreException e) {
+			throw new PemToJksException("Could not store entry in keystore: " + e.getMessage(), e);
+		}
+
+		return store;
+	}
     
     
     KeyStore createEmptyKeyStore(String ksPass) throws PemToJksException {
@@ -146,7 +215,7 @@ public class App {
     }
     
     
-    static KeyStore loadKeyStore(String ksPass, URL ksUrl) throws PemToJksException {
+    KeyStore loadKeyStore(String ksPass, URL ksUrl) throws PemToJksException {
     	KeyStore ks;
 		String ksType = KeyStore.getDefaultType();
 		String initializeErr = "Could not initialize keystore of type " + ksType + ": ";
@@ -187,34 +256,6 @@ public class App {
     }
     
     
-	KeyStore newSingleEntryKeystore(RSAPrivateKey key, List<X509Certificate> chain, String passwd) 
-			throws PemToJksException {
-		// This method assumes that the first cert in the chain is "our" cert. Is that safe???
-		KeyStore store;
-		
-		if (chain == null || chain.isEmpty()) {
-			throw new PemToJksException("ERROR: The certificate chain is empty");
-		}
-		
-		store = createEmptyKeyStore(passwd);
-
-		String entryAlias = determineEntryAlias(chain.get(0));
-
-		if ("".equals(entryAlias)) {
-			// TODO
-			throw new PemToJksException(
-					"Could not store entry: no alias argument given AND the certificate has no /CN field");
-		} 
-
-		try {
-			store.setKeyEntry(entryAlias, key, passwd.toCharArray(), chain.toArray(new Certificate[chain.size()]));
-		} catch (KeyStoreException e) {
-			throw new PemToJksException("Could not store entry in keystore: " + e.getMessage(), e);
-		}
-
-		return store;
-	}
-
 	RSAPrivateKey getPrivateKey(URL keyUrl) throws PemToJksException {
 		KeyFactory kf;
 
@@ -237,39 +278,6 @@ public class App {
 	}
 		
 
-	List<X509Certificate> getCertChain(URL certUrl) throws PemToJksException {
-		List<X509Certificate> certs = new ArrayList<>();
-		Certificate nextCert;
-		CertificateFactory cf;
-
-		try {
-			cf = CertificateFactory.getInstance("X.509");
-		} catch (CertificateException e) {
-			throw new PemToJksException("Could not get a CertificateFactory for X509 format " + e.getMessage(), e);
-		}
-
-		try (BufferedInputStream bis = new BufferedInputStream(certUrl.openStream());) {
-			while (bis.available() > 0) {
-				nextCert = cf.generateCertificate(bis);
-				if (nextCert instanceof X509Certificate) {
-					certs.add((X509Certificate) nextCert);
-				} else {
-					System.err.println("Found a cert of an unexpected type: " + nextCert.getType());
-				}
-			}
-		} catch (IOException | CertificateException e) {
-			throw new PemToJksException("Could not parse cert chain from URL (" + certUrl + "): " + e.getMessage(), e);
-		}
-
-		return certs;
-	}
-	
-	
-	String determineEntryAlias(X509Certificate cert) {
-		return ! "".equals(this.alias) ? this.alias : getCertCN(cert);
-	}
-	
-	
 	String getCertCN(X509Certificate cert) {
 		X500Principal principal = cert.getSubjectX500Principal();
 		String distinguishedName = principal.getName(X500Principal.RFC1779);

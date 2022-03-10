@@ -9,6 +9,7 @@ import java.net.URL;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.io.IOException;
+import java.util.Enumeration;
 import java.util.List;
 
 import java.security.KeyStore;
@@ -23,34 +24,71 @@ import org.junit.jupiter.api.Test;
 public class AppTest {
 	private final URL selfSignedCertUrl = this.getClass().getResource("self_signed_site_cert.pem");
 	private final URL selfSignedKeyUrl = this.getClass().getResource("self_signed_site_priv.pem");
-	private final String certCN = "PemToJksTesting";
+	private final URL caSignedCertUrl = this.getClass().getResource("ca_signed_site_cert.pem");
+	private final URL caCertUrl = this.getClass().getResource("ca/dummy_root_ca_cert.pem");
+	private final URL caSignedKeyUrl = this.getClass().getResource("ca_signed_site_priv.pem");
+	private final String selfSignedCertCN = "PemToJksTesting";
+	private final String caSignedCertCN = "PemToJks CA-Signed Cert";
 	
 	@Test
 	void testMain() throws Exception {
+		String certFile;
+		Certificate keystoreCert;
+		Certificate[] keystoreChain;
+		PublicKey keystorePubKey;
+		KeyStore ks;
 		String privKeyFile = Path.of(selfSignedKeyUrl.toURI()).toAbsolutePath().toString();
 		String chainFile = Path.of(selfSignedCertUrl.toURI()).toAbsolutePath().toString();
 		String keystoreFile = Files.createTempDirectory("keystore").toFile().getAbsolutePath()
 				+ "test-keystore.jks";
 		Path keystorePath = Path.of(keystoreFile);
+		
+		App app = new App();
 
-			
-		App.main(new String[] 
+		// First, run with self-signed cert	
+		app.run(new String[] 
 				{"-key", privKeyFile, 
 				 "-chain", chainFile, 
 				 "-out", keystoreFile});
 		
 		assertTrue(keystorePath.toFile().exists(), "Keystore was not created!");
+		ks = app.loadKeyStore(App.DEFAULT_KEYSTORE_PASSWORD, keystorePath.toUri().toURL());
+		for (Enumeration<String> aliases = ks.aliases(); aliases.hasMoreElements();) {
+			System.err.println(aliases.nextElement());
+		}
 
-		KeyStore ks = App.loadKeyStore(App.DEFAULT_KEYSTORE_PASSWORD, keystorePath.toUri().toURL());
-		ks.isKeyEntry(certCN);
+		assertTrue(ks.containsAlias(selfSignedCertCN), "Keystore has no entry for: " + selfSignedCertCN + "!");
 
-		Certificate selfSignedCert = ks.getCertificate(certCN);
-		PublicKey pubKey = selfSignedCert.getPublicKey();
-		selfSignedCert.verify(pubKey);
+		assertTrue(ks.isKeyEntry(selfSignedCertCN), "Keystore contains the wrong entry type!");
+
+		keystoreCert = ks.getCertificate(selfSignedCertCN);
+		keystorePubKey = keystoreCert.getPublicKey();
+		keystoreCert.verify(keystorePubKey);
+		
+		// Now, replace with the CA-signed cert
+		privKeyFile = Path.of(caSignedKeyUrl.toURI()).toAbsolutePath().toString();
+		certFile = Path.of(caSignedCertUrl.toURI()).toAbsolutePath().toString();
+		chainFile = Path.of(caCertUrl.toURI()).toAbsolutePath().toString();
+		app.run(new String[] 
+				{"-key", privKeyFile,
+				 "-cert", certFile,
+				 "-chain", chainFile,
+				 "-out", keystoreFile});
+		
+		assertTrue(keystorePath.toFile().exists(), "Keystore was deleted!");
+		// Need to reload to see changes
+		ks = app.loadKeyStore(App.DEFAULT_KEYSTORE_PASSWORD, keystorePath.toUri().toURL());
+		for (Enumeration<String> aliases = ks.aliases(); aliases.hasMoreElements();) {
+			System.err.println(aliases.nextElement());
+		}
+		assertTrue(ks.containsAlias(caSignedCertCN), "Keystore has no entry for: " + caSignedCertCN + "!");
+		assertTrue(ks.isKeyEntry(caSignedCertCN), "Keystore contains the wrong entry type!");
+		
+		keystoreCert = ks.getCertificate(caSignedCertCN);
 	}
 	
     @Test
-    void testGetCertChain() throws Exception {
+    void testGetCertChainSelfSigned() throws Exception {
 		App app = new App();
 
 		List<X509Certificate> certs = app.getCertChain(selfSignedCertUrl);
@@ -70,16 +108,19 @@ public class AppTest {
 	void testGetCertCN() throws Exception {
 		App app = new App();
 
-		assertEquals(certCN, app.getCertCN(app.getCertChain(selfSignedCertUrl).get(0)));
+		assertEquals(selfSignedCertCN, app.getCertCN(app.getCertChain(selfSignedCertUrl).get(0)));
 	}
 
 	@Test
 	void testNewSingleEntryKeystore() throws PemToJksException, KeyStoreException {
 		App app = new App();
+		List<X509Certificate> selfSignedChain = app.getCertChain(selfSignedCertUrl);
+		X509Certificate cert = selfSignedChain.get(0);
 
 		KeyStore ks = app.newSingleEntryKeystore(
 				app.getPrivateKey(selfSignedKeyUrl),
-				app.getCertChain(selfSignedCertUrl),
+				cert,
+				selfSignedChain,
 				App.DEFAULT_KEYSTORE_PASSWORD);
 		assertTrue(ks.containsAlias("PemToJksTesting"), "Did not find alias in keystore");
 	}
