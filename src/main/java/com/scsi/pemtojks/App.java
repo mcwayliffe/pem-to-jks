@@ -314,9 +314,14 @@ public class App {
 
 		try {
 			String keyData = new String(keyUrl.openStream().readAllBytes())
-					.replace("-----BEGIN PRIVATE KEY-----", "")
+					.replaceAll("-----BEGIN PRIVATE KEY-----", "")
 					.replaceAll(System.lineSeparator(), "")
-					.replace("-----END PRIVATE KEY-----", "");
+					.replaceAll("-----END PRIVATE KEY-----", "");
+
+			if (keyData.contains("-")) { // This means we didn't strip off the header and footer
+				throw new PemToJksException("ERROR: Private Key is not in PKCS#8 format");
+			}
+
 			PKCS8EncodedKeySpec keySpec = new PKCS8EncodedKeySpec(Base64.getDecoder().decode(keyData));
 			return (RSAPrivateKey) kf.generatePrivate(keySpec);
 		} catch (IOException | InvalidKeySpecException e) {
