@@ -43,7 +43,7 @@ import com.beust.jcommander.converters.PathConverter;
 // 3. Test this on a running instance of Apache-FTPServer
 public class App {
 	private static final Pattern CN_PAT_RFC1779 = Pattern.compile("CN\\s*=\\s*([A-Za-z0-9._ -]+)(,)*");
-	private static final String DEFAULT_KEYSTORE_NAME = "keystore.jks";
+	private static final String DEFAULT_KEYSTORE_NAME = "keystore";
 	static final String DEFAULT_KEYSTORE_PASSWORD = "changeit";
 	
 	@Parameter(names = "-help", help = true)
@@ -75,8 +75,9 @@ public class App {
 
 	@Parameter(names = "-alias")
 	private String alias = ""; // Will use the CN from the cert if none specified
-
-
+	
+	@Parameter(names = "-storetype")
+	private String storeType = KeyStore.getDefaultType();
 	
     public static void main(String[] args) throws PemToJksException {
 		new App().run(args);
@@ -136,6 +137,11 @@ public class App {
 		// We want the key password to default to the store password if the user passes one in
 		if ("".equals(this.keyPass)) {
 			this.keyPass = this.storePass;
+		}
+		
+		switch (this.storeType) {
+		case "JKS":
+			
 		}
     }
     
@@ -264,11 +270,10 @@ public class App {
     
     KeyStore loadKeyStore(String ksPass, URL ksUrl) throws PemToJksException {
     	KeyStore ks;
-		String ksType = KeyStore.getDefaultType();
-		String initializeErr = "Could not initialize keystore of type " + ksType + ": ";
+		String initializeErr = "Could not initialize keystore of type " + this.storeType + ": ";
 
     	try {
-    		ks = KeyStore.getInstance(ksType);
+    		ks = KeyStore.getInstance(this.storeType);
     	} catch (KeyStoreException e) {
 			throw new PemToJksException(initializeErr + e.getMessage(), e);
     	}
