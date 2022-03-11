@@ -32,6 +32,8 @@ public class AppTest {
 	
 	@Test
 	void testMain() throws Exception {
+		final String storePassOverride = "verysecure";
+		final String keyPassOverride = "alsoprettysecure";
 		String certFile;
 		Certificate keystoreCert;
 		Certificate[] keystoreChain;
@@ -49,10 +51,12 @@ public class AppTest {
 		app.run(new String[] 
 				{"-key", privKeyFile, 
 				 "-chain", chainFile, 
-				 "-out", keystoreFile});
+				 "-out", keystoreFile, 
+				 "-storepass", storePassOverride, 
+				 "-keypass", keyPassOverride});
 		
 		assertTrue(keystorePath.toFile().exists(), "Keystore was not created!");
-		ks = app.loadKeyStore(App.DEFAULT_KEYSTORE_PASSWORD, keystorePath.toUri().toURL());
+		ks = app.loadKeyStore(storePassOverride, keystorePath.toUri().toURL());
 		for (Enumeration<String> aliases = ks.aliases(); aliases.hasMoreElements();) {
 			System.err.println(aliases.nextElement());
 		}
@@ -63,12 +67,18 @@ public class AppTest {
 
 		keystoreCert = ks.getCertificate(selfSignedCertCN);
 		keystorePubKey = keystoreCert.getPublicKey();
-		keystoreCert.verify(keystorePubKey);
+
+		// These will throw if something is wrong
+		keystoreCert.verify(keystorePubKey); 
+		ks.getKey(selfSignedCertCN, keyPassOverride.toCharArray());
+			
 		
 		// Now, replace with the CA-signed cert
 		privKeyFile = Path.of(caSignedKeyUrl.toURI()).toAbsolutePath().toString();
 		certFile = Path.of(caSignedCertUrl.toURI()).toAbsolutePath().toString();
 		chainFile = Path.of(caCertUrl.toURI()).toAbsolutePath().toString();
+		app = new App();
+
 		app.run(new String[] 
 				{"-key", privKeyFile,
 				 "-force",
@@ -115,14 +125,14 @@ public class AppTest {
 	@Test
 	void testNewSingleEntryKeystore() throws PemToJksException, KeyStoreException {
 		App app = new App();
+		app.setKeyPass(App.DEFAULT_KEYSTORE_PASSWORD);
 		List<X509Certificate> selfSignedChain = app.getCertChain(selfSignedCertUrl);
 		X509Certificate cert = selfSignedChain.get(0);
 
 		KeyStore ks = app.newSingleEntryKeystore(
 				app.getPrivateKey(selfSignedKeyUrl),
 				cert,
-				selfSignedChain,
-				App.DEFAULT_KEYSTORE_PASSWORD);
+				selfSignedChain);
 		assertTrue(ks.containsAlias("PemToJksTesting"), "Did not find alias in keystore");
 	}
 }

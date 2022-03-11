@@ -59,7 +59,7 @@ public class App {
 	private Path keyFile;
 
 	@Parameter(names = "-keypass")
-	private String keyPass;
+	private String keyPass = "";
 
 	@Parameter(names = "-cert", converter = PathConverter.class)
 	private Path certFile;
@@ -70,8 +70,8 @@ public class App {
 	@Parameter(names = "-out", converter = PathConverter.class)
 	private Path keystoreFile = Path.of(DEFAULT_KEYSTORE_NAME); // Make sure this ends with ".jks"
 
-	@Parameter(names = "-keystorepass")
-	private String keystorePass = DEFAULT_KEYSTORE_PASSWORD;
+	@Parameter(names = "-storepass")
+	private String storePass = DEFAULT_KEYSTORE_PASSWORD;
 
 	@Parameter(names = "-alias")
 	private String alias = ""; // Will use the CN from the cert if none specified
@@ -110,9 +110,9 @@ public class App {
 		throwIfCertWontVerify(clientCert, certChain); // Signatures 
 		
 		RSAPrivateKey privateKey = getPrivateKey(pathToUrl(this.keyFile));
-		KeyStore keystore = newSingleEntryKeystore(privateKey, clientCert, certChain, keystorePass);
+		KeyStore keystore = newSingleEntryKeystore(privateKey, clientCert, certChain);
 		
-		saveKeyStore(keystore, this.keystorePass, this.keystoreFile);
+		saveKeyStore(keystore, this.storePass, this.keystoreFile);
     }
     
 
@@ -131,6 +131,11 @@ public class App {
 		if (this.help) {
 			jc.usage();
 			System.exit(1);
+		}
+		
+		// We want the key password to default to the store password if the user passes one in
+		if ("".equals(this.keyPass)) {
+			this.keyPass = this.storePass;
 		}
     }
     
@@ -217,10 +222,8 @@ public class App {
     }
     
     
-	KeyStore newSingleEntryKeystore(
-			RSAPrivateKey key, X509Certificate cert, List<X509Certificate> chain, String passwd) 
+	KeyStore newSingleEntryKeystore(RSAPrivateKey key, X509Certificate cert, List<X509Certificate> chain) 
 			throws PemToJksException {
-		// This method assumes that the first cert in the chain is "our" cert. Is that safe???
 		KeyStore store;
 		List<X509Certificate> fullChain;
 		
@@ -235,7 +238,7 @@ public class App {
 		fullChain = new ArrayList<>(chain);
 		fullChain.add(0, cert);
 		
-		store = createEmptyKeyStore(passwd);
+		store = createEmptyKeyStore(this.storePass);
 
 		String entryAlias = ! "".equals(this.alias) ? this.alias : getCertCN(cert);
 
@@ -245,7 +248,7 @@ public class App {
 		} 
 
 		try {
-			store.setKeyEntry(entryAlias, key, passwd.toCharArray(), chain.toArray(new Certificate[chain.size()]));
+			store.setKeyEntry(entryAlias, key, this.keyPass.toCharArray(), chain.toArray(new Certificate[chain.size()]));
 		} catch (KeyStoreException e) {
 			throw new PemToJksException("Could not store entry in keystore: " + e.getMessage(), e);
 		}
@@ -340,5 +343,16 @@ public class App {
 			throw new PemToJksException(
 					"Could not locate path (" + absPath + "): " + e.getMessage(), e);
 		}
+	}
+	
+
+	// Setters for testing
+	void setKeyPass(String pass) {
+		this.keyPass = pass;
+	}
+	
+
+	void setStorePass(String pass) {
+		this.storePass = pass;
 	}
 }
