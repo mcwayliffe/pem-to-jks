@@ -11,10 +11,12 @@ import java.security.InvalidKeyException;
 import java.security.KeyFactory;
 import java.security.KeyStore;
 import java.security.KeyStoreException;
+import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.security.NoSuchProviderException;
 import java.security.SignatureException;
 import java.security.cert.Certificate;
+import java.security.cert.CertificateEncodingException;
 import java.security.cert.CertificateException;
 import java.security.cert.CertificateExpiredException;
 import java.security.cert.CertificateFactory;
@@ -102,10 +104,19 @@ public class App {
 		if (certChain.isEmpty()) {
 			throw new PemToJksException("ERROR: No certificates found in chain file");
 		}
+		if (this.verbose) {
+			System.out.println("INFO: === CHAIN ===");
+			logCertChain(certChain);
+		}
 
 		clientCert = (null != this.certFile) ? 
 				getSingleCert(pathToUrl(this.certFile)) 
 				: certChain.get(0);
+		
+		if (this.verbose) {
+			System.out.println("INFO: === CLIENT CERT ===");
+			logCertInfo(clientCert);
+		}
 		
 		throwIfCertWontValidate(clientCert); // Expiration
 		throwIfCertWontVerify(clientCert, certChain); // Signatures 
@@ -355,6 +366,24 @@ public class App {
 		}
 	}
 	
+	// Logging helpers
+	void logCertChain(List<X509Certificate> chain) throws PemToJksException {
+		for (X509Certificate cert : chain) {
+			logCertInfo(cert);
+		}
+	}
+	
+	
+	void logCertInfo(X509Certificate cert) throws PemToJksException {
+		if (this.verbose) {
+			X500Principal sub = cert.getSubjectX500Principal();
+			X500Principal issuer = cert.getIssuerX500Principal();
+
+			// TODO It would be nice to have the Fingerprint output here
+			System.out.println("INFO: Subject: " +  sub);
+			System.out.println("INFO: Issuer: " + issuer);
+		}
+	}
 
 	// Setters for testing
 	void setKeyPass(String pass) {
