@@ -11,7 +11,6 @@ import java.security.InvalidKeyException;
 import java.security.KeyFactory;
 import java.security.KeyStore;
 import java.security.KeyStoreException;
-import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.security.NoSuchProviderException;
 import java.security.SignatureException;
@@ -112,6 +111,10 @@ public class App {
 		clientCert = (null != this.certFile) ? 
 				getSingleCert(pathToUrl(this.certFile)) 
 				: certChain.get(0);
+		
+		if (clientCert.equals(certChain.get(0)) && certChain.size() > 1) {
+			certChain.remove(0); // Do not duplicate client cert and chain
+		}
 		
 		if (this.verbose) {
 			System.out.println("INFO: === CLIENT CERT ===");
@@ -253,7 +256,10 @@ public class App {
 		}
 		
 		fullChain = new ArrayList<>(chain);
-		fullChain.add(0, cert);
+		if (!cert.equals(chain.get(0))) { 
+			// If the chain does not include the client cert, we need to add it
+			fullChain.add(0, cert);
+		}
 		
 		store = createEmptyKeyStore(this.storePass);
 
@@ -265,7 +271,7 @@ public class App {
 		} 
 
 		try {
-			store.setKeyEntry(entryAlias, key, this.keyPass.toCharArray(), chain.toArray(new Certificate[chain.size()]));
+			store.setKeyEntry(entryAlias, key, this.keyPass.toCharArray(), fullChain.toArray(new Certificate[chain.size()]));
 		} catch (KeyStoreException e) {
 			throw new PemToJksException("Could not store entry in keystore: " + e.getMessage(), e);
 		}

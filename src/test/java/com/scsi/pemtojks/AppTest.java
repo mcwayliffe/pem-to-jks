@@ -4,135 +4,138 @@ import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import java.io.InputStream;
 import java.net.URL;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.io.IOException;
-import java.util.Enumeration;
-import java.util.List;
-
 import java.security.KeyStore;
 import java.security.KeyStoreException;
 import java.security.PublicKey;
 import java.security.cert.Certificate;
 import java.security.cert.X509Certificate;
-import java.security.interfaces.RSAPrivateKey;
+import java.util.Enumeration;
+import java.util.List;
+import java.util.Random;
+import java.util.stream.Stream;
 
+import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.MethodSource;
 
 public class AppTest {
-	private final URL selfSignedCertUrl = this.getClass().getResource("self_signed_site_cert.pem");
-	private final URL selfSignedKeyUrl = this.getClass().getResource("self_signed_site_priv.pem");
-	private final URL caSignedCertUrl = this.getClass().getResource("ca_signed_site_cert.pem");
-	private final URL caCertUrl = this.getClass().getResource("ca/dummy_root_ca_cert.pem");
-	private final URL caSignedKeyUrl = this.getClass().getResource("ca_signed_site_priv.pem");
-	private final String selfSignedCertCN = "PemToJksTesting";
-	private final String caSignedCertCN = "PemToJks CA-Signed Cert";
+	private static final URL SELF_SIGNED_CERT_URL = AppTest.class.getResource("self_signed_site_cert.pem");
+	private static final URL SELF_SIGNED_KEY_URL = AppTest.class.getResource("self_signed_site_priv.pem");
+	private static final URL CA_SIGNED_CERT_URL = AppTest.class.getResource("ca_signed_site_cert.pem");
+	private static final URL CA_SIGNED_CERT_FULL_CHAIN_URL = AppTest.class.getResource("ca_signed_site_full_chain.pem");
+	private static final URL CA_CERT_URL = AppTest.class.getResource("ca/dummy_root_ca_cert.pem");
+	private static final URL CA_SIGNED_KEY_URL = AppTest.class.getResource("ca_signed_site_priv.pem");
+	private static final String SELF_SIGNED_CERT_CN = "PemToJksTesting";
+	private static final String CA_SIGNED_CERT_CN = "PemToJks CA-Signed Cert";
 	
-	@Test
-	void testMain() throws Exception {
+	private static class ChainInfo {
+		URL key, cert, chain;
+		String cn;
+		int chainLen;
+		
+		public ChainInfo(URL key, URL cert, URL chain, String cn, int len) {
+			this.key = key;
+			this.cert = cert;
+			this.chain = chain;
+			this.cn = cn;
+			this.chainLen = len;
+		}
+		
+		public String toString() {
+			return "CN: [" + cn + "]\nCert: [" + cert + "]\nKey: [" + key + "]\nChain: [" + chain + "]";
+		}
+	}
+	
+	@ParameterizedTest
+	@MethodSource("chainInfoProvider")
+	void testMain(AppTest.ChainInfo chainInfo) throws Exception {
+		final Random random = new Random();
+		final String privKeyFile = Path.of(chainInfo.key.toURI()).toAbsolutePath().toString();
+		final String chainFile = Path.of(chainInfo.chain.toURI()).toAbsolutePath().toString();
+		final String keystoreFile = Files.createTempDirectory("keystore").toFile().getAbsolutePath()
+				+ random.nextInt(1000) + ".jks";
+		final Path keystorePath = Path.of(keystoreFile);
 		final String storePassOverride = "verysecure";
 		final String keyPassOverride = "alsoprettysecure";
-		String certFile;
-		Certificate keystoreCert;
-		Certificate[] keystoreChain;
-		PublicKey keystorePubKey;
+		final App app = new App();
 		KeyStore ks;
-		String privKeyFile = Path.of(selfSignedKeyUrl.toURI()).toAbsolutePath().toString();
-		String chainFile = Path.of(selfSignedCertUrl.toURI()).toAbsolutePath().toString();
-		String keystoreFile = Files.createTempDirectory("keystore").toFile().getAbsolutePath()
-				+ "test-keystore.jks";
-		Path keystorePath = Path.of(keystoreFile);
-		
-		App app = new App();
 
-		// First, run with self-signed cert	
 		app.run(new String[] 
 				{"-key", privKeyFile, 
 				 "-chain", chainFile, 
 				 "-out", keystoreFile, 
 				 "-storepass", storePassOverride, 
+				 "-storetype", "JKS",
 				 "-keypass", keyPassOverride});
-		
+
 		assertTrue(keystorePath.toFile().exists(), "Keystore was not created!");
+
 		ks = app.loadKeyStore(storePassOverride, keystorePath.toUri().toURL());
-		for (Enumeration<String> aliases = ks.aliases(); aliases.hasMoreElements();) {
-			System.err.println(aliases.nextElement());
-		}
+		assertTrue(ks.containsAlias(chainInfo.cn), "Keystore has no entry for: " + chainInfo.cn + "!");
+		assertTrue(ks.isKeyEntry(chainInfo.cn), "Keystore contains the wrong entry type!");
+		{ 
+			Certificate storedCert = ks.getCertificate(chainInfo.cn);
+			Certificate[] storedChain = ks.getCertificateChain(chainInfo.cn);
+			PublicKey storedPubKey = storedCert.getPublicKey();
+			Certificate nextCert;
 
-		assertTrue(ks.containsAlias(selfSignedCertCN), "Keystore has no entry for: " + selfSignedCertCN + "!");
-
-		assertTrue(ks.isKeyEntry(selfSignedCertCN), "Keystore contains the wrong entry type!");
-
-		keystoreCert = ks.getCertificate(selfSignedCertCN);
-		keystorePubKey = keystoreCert.getPublicKey();
-
-		// These will throw if something is wrong
-		keystoreCert.verify(keystorePubKey); 
-		ks.getKey(selfSignedCertCN, keyPassOverride.toCharArray());
+			assertEquals(chainInfo.chainLen, storedChain.length);
 			
-		
-		// Now, replace with the CA-signed cert
-		privKeyFile = Path.of(caSignedKeyUrl.toURI()).toAbsolutePath().toString();
-		certFile = Path.of(caSignedCertUrl.toURI()).toAbsolutePath().toString();
-		chainFile = Path.of(caCertUrl.toURI()).toAbsolutePath().toString();
-		app = new App();
+			for (int i = 1; i < storedChain.length; i++) {
+				nextCert = storedChain[i];
+				// This will throw if something is wrong
+				storedCert.verify(nextCert.getPublicKey());
+				storedCert = nextCert;
+			}
 
-		app.run(new String[] 
-				{"-key", privKeyFile,
-				 "-force",
-				 "-cert", certFile,
-				 "-chain", chainFile,
-				 "-out", keystoreFile});
-		
-		assertTrue(keystorePath.toFile().exists(), "Keystore was deleted!");
-		// Need to reload to see changes
-		ks = app.loadKeyStore(App.DEFAULT_KEYSTORE_PASSWORD, keystorePath.toUri().toURL());
-		for (Enumeration<String> aliases = ks.aliases(); aliases.hasMoreElements();) {
-			System.err.println(aliases.nextElement());
+			// Will throw if the key is improperly stored
+			ks.getKey(chainInfo.cn, keyPassOverride.toCharArray());
 		}
-		assertTrue(ks.containsAlias(caSignedCertCN), "Keystore has no entry for: " + caSignedCertCN + "!");
-		assertTrue(ks.isKeyEntry(caSignedCertCN), "Keystore contains the wrong entry type!");
-		
-		keystoreCert = ks.getCertificate(caSignedCertCN);
 	}
 	
-    @Test
-    void testGetCertChainSelfSigned() throws Exception {
+	@ParameterizedTest
+	@MethodSource("chainInfoProvider")
+    void testGetCertChain(AppTest.ChainInfo chainInfo) throws Exception {
 		App app = new App();
-
-		List<X509Certificate> certs = app.getCertChain(selfSignedCertUrl);
-		assertEquals(1, certs.size());
+		assertEquals(chainInfo.chainLen, app.getCertChain(chainInfo.chain).size());
     }
 
-	@Test
-	void testGetPrivateKey() throws Exception {
+	@ParameterizedTest
+	@MethodSource("chainInfoProvider")
+	void testGetPrivateKey(AppTest.ChainInfo chainInfo) throws Exception {
 		App app = new App();
-
 		assertDoesNotThrow(
-			() -> app.getPrivateKey(selfSignedKeyUrl),
+			() -> app.getPrivateKey(chainInfo.key),
 			"getPrivateKey() should not throw");
 	}
 
-	@Test
-	void testGetCertCN() throws Exception {
+	@ParameterizedTest
+	@MethodSource("chainInfoProvider")
+	void testGetCertCN(AppTest.ChainInfo chainInfo) throws Exception {
 		App app = new App();
-
-		assertEquals(selfSignedCertCN, app.getCertCN(app.getCertChain(selfSignedCertUrl).get(0)));
+		assertEquals(chainInfo.cn, app.getCertCN(app.getSingleCert(chainInfo.cert)));
 	}
 
-	@Test
-	void testNewSingleEntryKeystore() throws PemToJksException, KeyStoreException {
+	@ParameterizedTest
+	@MethodSource("chainInfoProvider")
+	void testNewSingleEntryKeystore(AppTest.ChainInfo chainInfo) throws PemToJksException, KeyStoreException {
 		App app = new App();
 		app.setKeyPass(App.DEFAULT_KEYSTORE_PASSWORD);
-		List<X509Certificate> selfSignedChain = app.getCertChain(selfSignedCertUrl);
-		X509Certificate cert = selfSignedChain.get(0);
-
-		KeyStore ks = app.newSingleEntryKeystore(
-				app.getPrivateKey(selfSignedKeyUrl),
-				cert,
-				selfSignedChain);
-		assertTrue(ks.containsAlias("PemToJksTesting"), "Did not find alias in keystore");
+		List<X509Certificate> chain = app.getCertChain(chainInfo.chain);
+		X509Certificate cert = chain.get(0); 
+		
+		KeyStore ks = app.newSingleEntryKeystore(app.getPrivateKey(chainInfo.key), cert, chain);
+		assertTrue(ks.containsAlias(chainInfo.cn), "Did not find alias in keystore");
+		assertEquals(1, ks.size());
+	}
+	
+	static Stream<AppTest.ChainInfo> chainInfoProvider() {
+		return Stream.of(
+				new AppTest.ChainInfo(SELF_SIGNED_KEY_URL, SELF_SIGNED_CERT_URL, SELF_SIGNED_CERT_URL, SELF_SIGNED_CERT_CN, 1),
+				new AppTest.ChainInfo(CA_SIGNED_KEY_URL, CA_SIGNED_CERT_URL, CA_SIGNED_CERT_FULL_CHAIN_URL, CA_SIGNED_CERT_CN, 2));
 	}
 }
